@@ -1,0 +1,120 @@
+metadata:
+  name: "Sherlock OSINT Analyzer"
+  description: "Realiza búsquedas de nombres de usuario en múltiples plataformas y proporciona un análisis detallado"
+  version: "1.0.0"
+  author: "ZerodAI Community"
+
+inputs:
+  - name: usernames
+    type: array
+    label: "Nombres de usuario a buscar"
+    required: true
+  - name: options
+    type: object
+    label: "Opciones adicionales"
+    properties:
+      timeout:
+        type: number
+        default: 15
+      printAll:
+        type: boolean
+        default: false
+      noColor:
+        type: boolean
+        default: false
+      nsfw:
+        type: boolean
+        default: false
+
+outputs:
+  - name: results
+    type: array
+    label: "Resultados de la búsqueda"
+  - name: report
+    type: markdown
+    label: "Informe de análisis"
+
+dependencies:
+  - name: python3-pip
+    type: system
+  - name: sherlock-project
+    type: pip
+
+config:
+  sandbox:
+    template: cybersecurity-sandbox
+  timeout: 300000
+
+functions:
+  - name: install_dependencies
+    type: bash
+    command: |
+      sudo apt install -y python3-pip
+      pip3 install sherlock-project
+
+  - name: verify_sherlock
+    type: bash
+    command: sherlock --version
+
+  - name: run_sherlock
+    type: bash
+    command: |
+      sherlock $USERNAMES$ --print-found --timeout $OPTIONS.timeout$ 
+      $OPTIONS.printAll ? '--print-all' : ''$ 
+      $OPTIONS.noColor ? '--no-color' : ''$ 
+      $OPTIONS.nsfw ? '--nsfw' : ''$
+
+  - name: parse_sherlock_output
+    type: js
+    code: |
+      function parseSherlockOutput(output) {
+        const lines = output.split('\n');
+        const results = [];
+        
+        for (const line of lines) {
+          if (line.includes('[+]')) {
+            const [site, url] = line.split('[+]')[1].trim().split(': ');
+            results.push({ site: site.trim(), url: url.trim() });
+          }
+        }
+        
+        return results;
+      }
+
+  - name: analyze_results
+    type: llm
+    system_prompt: "Eres un experto en OSINT (Open Source Intelligence) y seguridad en línea. Analiza los resultados de la búsqueda de Sherlock proporcionados y genera un informe detallado sobre los hallazgos, posibles implicaciones de seguridad y privacidad, y recomendaciones. Responde en formato markdown en español."
+    user_prompt: "Analiza estos resultados de la búsqueda de Sherlock y proporciona un informe detallado:\n\n$RESULTS_JSON$\n\n"
+    language: es
+    model: groq
+
+flow:
+  - step: install_dependencies
+    description: "Instalando dependencias"
+
+  - step: verify_sherlock
+    description: "Verificando la instalación de Sherlock"
+
+  - step: run_sherlock
+    description: "Ejecutando Sherlock"
+    inputs:
+      USERNAMES: $inputs.usernames | join(' ')$
+      OPTIONS: $inputs.options$
+    output: sherlock_output
+
+  - step: parse_sherlock_output
+    description: "Procesando resultados de Sherlock"
+    inputs:
+      output: $sherlock_output$
+    output: parsed_results
+
+  - step: analyze_results
+    description: "Generando análisis de los resultados"
+    inputs:
+      RESULTS_JSON: $parsed_results | to_json$
+    output: analysis_report
+
+  - step: return
+    data:
+      results: $parsed_results$
+      report: $analysis_report$
